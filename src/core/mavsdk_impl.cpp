@@ -15,21 +15,50 @@
 namespace mavsdk {
 
 MavsdkImpl::MavsdkImpl() :
+    timeout_handler(_time),
     _connections_mutex(),
     _connections(),
     _systems_mutex(),
     _systems(),
     _on_discover_callback(nullptr),
-    _on_timeout_callback(nullptr)
+    _on_timeout_callback(nullptr),
+    _configuration(Mavsdk::Configuration::UsageType::GroundStation)
 {
     LogInfo() << "MAVSDK version: " << mavsdk_version;
+    set_configuration(_configuration);
+
+    if (const char* env_p = std::getenv("MAVSDK_CALLBACK_DEBUGGING")) {
+        if (env_p && std::string("1").compare(env_p) == 0) {
+            LogDebug() << "Callback debugging is on.";
+            _callback_debugging = true;
+        }
+    }
+
+    _work_thread = new std::thread(&MavsdkImpl::work_thread, this);
+
+    _process_user_callbacks_thread =
+        new std::thread(&MavsdkImpl::process_user_callbacks_thread, this);
 }
 
 MavsdkImpl::~MavsdkImpl()
 {
+    _should_exit = true;
+
+    if (_process_user_callbacks_thread != nullptr) {
+        _user_callback_queue.stop();
+        _process_user_callbacks_thread->join();
+        delete _process_user_callbacks_thread;
+        _process_user_callbacks_thread = nullptr;
+    }
+
+    if (_work_thread != nullptr) {
+        _work_thread->join();
+        delete _work_thread;
+        _work_thread = nullptr;
+    }
+
     {
         std::lock_guard<std::recursive_mutex> lock(_systems_mutex);
-        _should_exit = true;
 
         _systems.clear();
     }
@@ -72,14 +101,6 @@ void MavsdkImpl::receive_message(mavlink_message_t& message)
 {
     // Don't ever create a system with sysid 0.
     if (message.sysid == 0) {
-        return;
-    }
-
-    // FIXME: Ignore messages from QGroundControl for now. Usually QGC identifies
-    //        itself with sysid 255.
-    //        A better way would probably be to parse the heartbeat message and
-    //        look at type and check if it is MAV_TYPE_GCS.
-    if (message.sysid == 255) {
         return;
     }
 
@@ -135,11 +156,11 @@ ConnectionResult MavsdkImpl::add_any_connection(const std::string& connection_ur
 {
     CliArg cli_arg;
     if (!cli_arg.parse(connection_url)) {
-        return ConnectionResult::CONNECTION_URL_INVALID;
+        return ConnectionResult::ConnectionUrlInvalid;
     }
 
     switch (cli_arg.get_protocol()) {
-        case CliArg::Protocol::UDP: {
+        case CliArg::Protocol::Udp: {
             std::string path = Mavsdk::DEFAULT_UDP_BIND_IP;
             int port = Mavsdk::DEFAULT_UDP_PORT;
             if (!cli_arg.get_path().empty()) {
@@ -151,7 +172,7 @@ ConnectionResult MavsdkImpl::add_any_connection(const std::string& connection_ur
             return add_udp_connection(path, port);
         }
 
-        case CliArg::Protocol::TCP: {
+        case CliArg::Protocol::Tcp: {
             std::string path = Mavsdk::DEFAULT_TCP_REMOTE_IP;
             int port = Mavsdk::DEFAULT_TCP_REMOTE_PORT;
             if (!cli_arg.get_path().empty()) {
@@ -163,16 +184,17 @@ ConnectionResult MavsdkImpl::add_any_connection(const std::string& connection_ur
             return add_tcp_connection(path, port);
         }
 
-        case CliArg::Protocol::SERIAL: {
+        case CliArg::Protocol::Serial: {
             int baudrate = Mavsdk::DEFAULT_SERIAL_BAUDRATE;
             if (cli_arg.get_baudrate()) {
                 baudrate = cli_arg.get_baudrate();
             }
-            return add_serial_connection(cli_arg.get_path(), baudrate);
+            bool flow_control = cli_arg.get_flow_control();
+            return add_serial_connection(cli_arg.get_path(), baudrate, flow_control);
         }
 
         default:
-            return ConnectionResult::CONNECTION_ERROR;
+            return ConnectionResult::ConnectionError;
     }
 }
 
@@ -181,10 +203,10 @@ ConnectionResult MavsdkImpl::add_udp_connection(const std::string& local_ip, con
     auto new_conn = std::make_shared<UdpConnection>(
         std::bind(&MavsdkImpl::receive_message, this, std::placeholders::_1), local_ip, local_port);
     if (!new_conn) {
-        return ConnectionResult::CONNECTION_ERROR;
+        return ConnectionResult::ConnectionError;
     }
     ConnectionResult ret = new_conn->start();
-    if (ret == ConnectionResult::SUCCESS) {
+    if (ret == ConnectionResult::Success) {
         add_connection(new_conn);
     }
     return ret;
@@ -195,11 +217,11 @@ ConnectionResult MavsdkImpl::setup_udp_remote(const std::string& remote_ip, int 
     auto new_conn = std::make_shared<UdpConnection>(
         std::bind(&MavsdkImpl::receive_message, this, std::placeholders::_1), "0.0.0.0", 0);
     if (!new_conn) {
-        return ConnectionResult::CONNECTION_ERROR;
+        return ConnectionResult::ConnectionError;
     }
     ConnectionResult ret = new_conn->start();
     _is_single_system = true;
-    if (ret == ConnectionResult::SUCCESS) {
+    if (ret == ConnectionResult::Success) {
         new_conn->add_remote(remote_ip, remote_port);
         add_connection(new_conn);
         make_system_with_component(get_own_system_id(), get_own_component_id());
@@ -214,24 +236,28 @@ ConnectionResult MavsdkImpl::add_tcp_connection(const std::string& remote_ip, in
         remote_ip,
         remote_port);
     if (!new_conn) {
-        return ConnectionResult::CONNECTION_ERROR;
+        return ConnectionResult::ConnectionError;
     }
     ConnectionResult ret = new_conn->start();
-    if (ret == ConnectionResult::SUCCESS) {
+    if (ret == ConnectionResult::Success) {
         add_connection(new_conn);
     }
     return ret;
 }
 
-ConnectionResult MavsdkImpl::add_serial_connection(const std::string& dev_path, int baudrate)
+ConnectionResult
+MavsdkImpl::add_serial_connection(const std::string& dev_path, int baudrate, bool flow_control)
 {
     auto new_conn = std::make_shared<SerialConnection>(
-        std::bind(&MavsdkImpl::receive_message, this, std::placeholders::_1), dev_path, baudrate);
+        std::bind(&MavsdkImpl::receive_message, this, std::placeholders::_1),
+        dev_path,
+        baudrate,
+        flow_control);
     if (!new_conn) {
-        return ConnectionResult::CONNECTION_ERROR;
+        return ConnectionResult::ConnectionError;
     }
     ConnectionResult ret = new_conn->start();
-    if (ret == ConnectionResult::SUCCESS) {
+    if (ret == ConnectionResult::Success) {
         add_connection(new_conn);
     }
     return ret;
@@ -245,7 +271,9 @@ void MavsdkImpl::add_connection(std::shared_ptr<Connection> new_connection)
 
 void MavsdkImpl::set_configuration(Mavsdk::Configuration configuration)
 {
-    _configuration = configuration;
+    own_address.system_id = configuration.get_system_id();
+    own_address.component_id = configuration.get_component_id();
+    _configuration.set_usage_type(configuration.get_usage_type());
 }
 
 std::vector<uint64_t> MavsdkImpl::get_system_uuids() const
@@ -273,7 +301,8 @@ System& MavsdkImpl::get_system()
         }
 
         if (_systems.size() > 1) {
-            LogErr() << "More than one system found:";
+            LogWarn()
+                << "More than one system found. You should be using `get_system(uuid)` instead of `get_system()`!";
 
             // Just return first system instead of failing.
             return *_systems.begin()->second;
@@ -310,55 +339,30 @@ System& MavsdkImpl::get_system(const uint64_t uuid)
 
 uint8_t MavsdkImpl::get_own_system_id() const
 {
-    switch (_configuration.load()) {
-        case Mavsdk::Configuration::Autopilot:
-            return 1;
-
-        case Mavsdk::Configuration::GroundStation:
-            return MAV_COMP_ID_MISSIONPLANNER;
-
-        case Mavsdk::Configuration::CompanionComputer:
-            // FIXME: This should be the same as the drone but we need to
-            // add auto detection for it.
-            return 1;
-
-        default:
-            LogErr() << "Unknown configuration";
-            return 0;
-    }
+    // TODO: To be deprecated.
+    return own_address.system_id;
 }
 
 uint8_t MavsdkImpl::get_own_component_id() const
 {
-    switch (_configuration.load()) {
-        case Mavsdk::Configuration::Autopilot:
-            return MAV_COMP_ID_AUTOPILOT1;
-
-        case Mavsdk::Configuration::GroundStation:
-            // FIXME: For now we increment by 1 to avoid conflicts with others.
-            return MAV_COMP_ID_MISSIONPLANNER + 1;
-
-        case Mavsdk::Configuration::CompanionComputer:
-            // It's at least a possibility that we are bridging MAVLink traffic.
-            return MAV_COMP_ID_UDP_BRIDGE;
-
-        default:
-            LogErr() << "Unknown configuration";
-            return 0;
-    }
+    // TODO: To be deprecated.
+    return own_address.component_id;
 }
 
 uint8_t MavsdkImpl::get_mav_type() const
 {
-    switch (_configuration.load()) {
-        case Mavsdk::Configuration::Autopilot:
+    switch (_configuration.get_usage_type()) {
+        case Mavsdk::Configuration::UsageType::Autopilot:
             return MAV_TYPE_GENERIC;
 
-        case Mavsdk::Configuration::GroundStation:
+        case Mavsdk::Configuration::UsageType::GroundStation:
             return MAV_TYPE_GCS;
 
-        case Mavsdk::Configuration::CompanionComputer:
+        case Mavsdk::Configuration::UsageType::CompanionComputer:
             return MAV_TYPE_ONBOARD_CONTROLLER;
+
+        case Mavsdk::Configuration::UsageType::Custom:
+            return MAV_TYPE_GENERIC;
 
         default:
             LogErr() << "Unknown configuration";
@@ -455,6 +459,72 @@ void MavsdkImpl::register_on_discover(const Mavsdk::event_callback_t callback)
 void MavsdkImpl::register_on_timeout(const Mavsdk::event_callback_t callback)
 {
     _on_timeout_callback = callback;
+}
+
+void MavsdkImpl::work_thread()
+{
+    while (!_should_exit) {
+        timeout_handler.run_once();
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+}
+
+void MavsdkImpl::call_user_callback_located(
+    const std::string& filename, const int linenumber, const std::function<void()>& func)
+{
+    auto callback_size = _user_callback_queue.size();
+    if (callback_size == 10) {
+        LogWarn()
+            << "User callback queue too slow.\n"
+               "See: https://mavsdk.mavlink.io/develop/en/cpp/troubleshooting.html#user_callbacks";
+
+    } else if (callback_size == 99) {
+        LogErr()
+            << "User callback queue overflown\n"
+               "See: https://mavsdk.mavlink.io/develop/en/cpp/troubleshooting.html#user_callbacks";
+
+    } else if (callback_size == 100) {
+        return;
+    }
+
+    // We only need to keep track of filename and linenumber if we're actually debugging this.
+    UserCallback user_callback =
+        _callback_debugging ? UserCallback{func, filename, linenumber} : UserCallback{func};
+
+    _user_callback_queue.enqueue(user_callback);
+}
+
+void MavsdkImpl::process_user_callbacks_thread()
+{
+    while (!_should_exit) {
+        auto callback = _user_callback_queue.dequeue();
+        if (!callback.first) {
+            continue;
+        }
+
+        void* cookie{nullptr};
+
+        const double timeout_s = 1.0;
+        timeout_handler.add(
+            [&]() {
+                if (_callback_debugging) {
+                    LogWarn() << "Callback called from " << callback.second.filename << ":"
+                              << callback.second.linenumber << " took more than " << timeout_s
+                              << " second to run.";
+                    fflush(stdout);
+                    fflush(stderr);
+                    abort();
+                } else {
+                    LogWarn()
+                        << "Callback took more than " << timeout_s << " second to run.\n"
+                        << "See: https://mavsdk.mavlink.io/develop/en/cpp/troubleshooting.html#user_callbacks";
+                }
+            },
+            timeout_s,
+            &cookie);
+        callback.second.func();
+        timeout_handler.remove(cookie);
+    }
 }
 
 } // namespace mavsdk

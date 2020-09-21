@@ -21,6 +21,7 @@ void MavlinkPassthroughImpl::deinit()
 {
     _parent->intercept_incoming_messages(nullptr);
     _parent->intercept_outgoing_messages(nullptr);
+    _parent->unregister_all_mavlink_message_handlers(this);
 }
 
 void MavlinkPassthroughImpl::enable() {}
@@ -30,9 +31,9 @@ void MavlinkPassthroughImpl::disable() {}
 MavlinkPassthrough::Result MavlinkPassthroughImpl::send_message(mavlink_message_t& message)
 {
     if (!_parent->send_message(message)) {
-        return MavlinkPassthrough::Result::CONNECTION_ERROR;
+        return MavlinkPassthrough::Result::ConnectionError;
     }
-    return MavlinkPassthrough::Result::SUCCESS;
+    return MavlinkPassthrough::Result::Success;
 }
 
 void MavlinkPassthroughImpl::subscribe_message_async(

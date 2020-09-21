@@ -9,6 +9,7 @@ configure_file(version.h.in version.h)
 add_library(mavsdk
     call_every_handler.cpp
     connection.cpp
+    connection_result.cpp
     curl_wrapper.cpp
     system.cpp
     system_impl.cpp
@@ -16,10 +17,12 @@ add_library(mavsdk
     mavsdk_impl.cpp
     global_include.cpp
     http_loader.cpp
-    mavlink_parameters.cpp
-    mavlink_commands.cpp
     mavlink_channels.cpp
+    mavlink_commands.cpp
+    mavlink_mission_transfer.cpp
+    mavlink_parameters.cpp
     mavlink_receiver.cpp
+    mavlink_message_handler.cpp
     plugin_impl_base.cpp
     serial_connection.cpp
     tcp_connection.cpp
@@ -27,7 +30,6 @@ add_library(mavsdk
     udp_connection.cpp
     log.cpp
     cli_arg.cpp
-    thread_pool.cpp
     geometry.cpp
     timesync.cpp
 )
@@ -36,6 +38,10 @@ target_link_libraries(mavsdk
     PRIVATE
     CURL::libcurl
     ${CMAKE_THREAD_LIBS_INIT}
+)
+set_target_properties(mavsdk PROPERTIES
+    VERSION ${MAVSDK_VERSION_STRING}
+    SOVERSION ${MAVSDK_SOVERSION_STRING}
 )
 
 if (IOS)
@@ -100,8 +106,9 @@ list(APPEND UNIT_TEST_SOURCES
     ${PROJECT_SOURCE_DIR}/core/any_test.cpp
     ${PROJECT_SOURCE_DIR}/core/cli_arg_test.cpp
     ${PROJECT_SOURCE_DIR}/core/locked_queue_test.cpp
-    ${PROJECT_SOURCE_DIR}/core/thread_pool_test.cpp
+    ${PROJECT_SOURCE_DIR}/core/safe_queue_test.cpp
     ${PROJECT_SOURCE_DIR}/core/mavsdk_test.cpp
+    ${PROJECT_SOURCE_DIR}/core/mavlink_mission_transfer_test.cpp
     ${PROJECT_SOURCE_DIR}/core/geometry_test.cpp
 )
 set(UNIT_TEST_SOURCES ${UNIT_TEST_SOURCES} PARENT_SCOPE)

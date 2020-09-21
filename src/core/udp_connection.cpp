@@ -5,7 +5,7 @@
 #ifdef WINDOWS
 #include <winsock2.h>
 #include <Ws2tcpip.h> // For InetPton
-#undef SOCKET_ERROR // conflicts with ConnectionResult::SOCKET_ERROR
+#undef SOCKET_ERROR // conflicts with ConnectionResult::SocketError
 #ifndef MINGW
 #pragma comment(lib, "Ws2_32.lib") // Without this, Ws2_32.lib is not included in static library.
 #endif
@@ -46,17 +46,17 @@ UdpConnection::~UdpConnection()
 ConnectionResult UdpConnection::start()
 {
     if (!start_mavlink_receiver()) {
-        return ConnectionResult::CONNECTIONS_EXHAUSTED;
+        return ConnectionResult::ConnectionsExhausted;
     }
 
     ConnectionResult ret = setup_port();
-    if (ret != ConnectionResult::SUCCESS) {
+    if (ret != ConnectionResult::Success) {
         return ret;
     }
 
     start_recv_thread();
 
-    return ConnectionResult::SUCCESS;
+    return ConnectionResult::Success;
 }
 
 ConnectionResult UdpConnection::setup_port()
@@ -65,7 +65,7 @@ ConnectionResult UdpConnection::setup_port()
     WSADATA wsa;
     if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
         LogErr() << "Error: Winsock failed, error: %d", WSAGetLastError();
-        return ConnectionResult::SOCKET_ERROR;
+        return ConnectionResult::SocketError;
     }
 #endif
 
@@ -73,7 +73,7 @@ ConnectionResult UdpConnection::setup_port()
 
     if (_socket_fd < 0) {
         LogErr() << "socket error" << GET_ERROR(errno);
-        return ConnectionResult::SOCKET_ERROR;
+        return ConnectionResult::SocketError;
     }
 
     struct sockaddr_in addr {};
@@ -83,10 +83,10 @@ ConnectionResult UdpConnection::setup_port()
 
     if (bind(_socket_fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
         LogErr() << "bind error: " << GET_ERROR(errno);
-        return ConnectionResult::BIND_ERROR;
+        return ConnectionResult::BindError;
     }
 
-    return ConnectionResult::SUCCESS;
+    return ConnectionResult::Success;
 }
 
 void UdpConnection::start_recv_thread()
@@ -122,7 +122,7 @@ ConnectionResult UdpConnection::stop()
     // it can happen that we interfere with the parsing of a message.
     stop_mavlink_receiver();
 
-    return ConnectionResult::SUCCESS;
+    return ConnectionResult::Success;
 }
 
 bool UdpConnection::send_message(const mavlink_message_t& message)
@@ -134,20 +134,13 @@ bool UdpConnection::send_message(const mavlink_message_t& message)
         return false;
     }
 
-    // Some messages have a target system set which allows to send it only
-    // on the matching link.
-    const mavlink_msg_entry_t* entry = mavlink_get_msg_entry(message.msgid);
-    const uint8_t target_system_id =
-        (entry && (entry->flags & MAV_MSG_ENTRY_FLAG_HAVE_TARGET_SYSTEM) ?
-             reinterpret_cast<const uint8_t*>(message.payload64)[entry->target_system_ofs] :
-             0);
-
+    // Send the message to all the remotes. A remote is a UDP endpoint
+    // identified by its <ip, port>. This means that if we have two
+    // systems on two different endpoints, then messages directed towards
+    // only one system will be sent to both remotes. The systems are
+    // then expected to ignore messages that are not directed to them.
     bool send_successful = true;
     for (auto& remote : _remotes) {
-        if (target_system_id != 0 && remote.system_id != target_system_id) {
-            continue;
-        }
-
         struct sockaddr_in dest_addr {};
         dest_addr.sin_family = AF_INET;
 
@@ -187,21 +180,16 @@ void UdpConnection::add_remote_with_remote_sysid(
     Remote new_remote;
     new_remote.ip = remote_ip;
     new_remote.port_number = remote_port;
-    new_remote.system_id = remote_sysid;
 
     auto existing_remote =
-        std::find_if(_remotes.begin(), _remotes.end(), [&new_remote](const Remote& remote) {
-            return (remote.ip == new_remote.ip && remote.port_number == new_remote.port_number);
+        std::find_if(_remotes.begin(), _remotes.end(), [&new_remote](Remote& remote) {
+            return remote == new_remote;
         });
 
     if (existing_remote == _remotes.end()) {
-        LogInfo() << "New system on: " << new_remote.ip << ":" << new_remote.port_number << " (with sysid: " << (int)new_remote.system_id << ")";
+        LogInfo() << "New system on: " << new_remote.ip << ":" << new_remote.port_number
+                  << " (with sysid: " << (int)remote_sysid << ")";
         _remotes.push_back(new_remote);
-    } else if (existing_remote->system_id != new_remote.system_id) {
-        LogWarn() << "System on: " << new_remote.ip << ":" << new_remote.port_number
-                  << " changed system ID (" << int(existing_remote->system_id) << " to "
-                  << int(new_remote.system_id) << ")";
-        existing_remote->system_id = new_remote.system_id;
     }
 }
 
@@ -242,34 +230,8 @@ void UdpConnection::receive()
         while (_mavlink_receiver->parse_message()) {
             const uint8_t sysid = _mavlink_receiver->get_last_message().sysid;
 
-            // FIXME: We ignore messages from QGC (255) for now.
-            if (!saved_remote && sysid != 0 && sysid != 255) {
+            if (!saved_remote && sysid != 0) {
                 saved_remote = true;
-                {
-                    std::lock_guard<std::mutex> lock(_remote_mutex);
-                    Remote new_remote;
-                    new_remote.ip = inet_ntoa(src_addr.sin_addr);
-                    new_remote.port_number = ntohs(src_addr.sin_port);
-                    new_remote.system_id = sysid;
-
-                    auto existing_remote = std::find_if(
-                        _remotes.begin(), _remotes.end(), [&new_remote](const Remote& remote) {
-                            return (
-                                remote.ip == new_remote.ip &&
-                                remote.port_number == new_remote.port_number);
-                        });
-
-                    if (existing_remote == _remotes.end()) {
-                        LogInfo() << "New system on: " << new_remote.ip << ":"
-                                  << new_remote.port_number;
-                        _remotes.push_back(new_remote);
-                    } else if (existing_remote->system_id != new_remote.system_id) {
-                        LogWarn() << "System on: " << new_remote.ip << ":" << new_remote.port_number
-                                  << " changed system ID (" << int(existing_remote->system_id)
-                                  << " to " << int(new_remote.system_id) << ")";
-                        existing_remote->system_id = new_remote.system_id;
-                    }
-                }
                 add_remote_with_remote_sysid(
                     inet_ntoa(src_addr.sin_addr), ntohs(src_addr.sin_port), sysid);
             }

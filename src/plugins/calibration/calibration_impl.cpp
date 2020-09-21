@@ -36,22 +36,23 @@ void CalibrationImpl::enable() {}
 
 void CalibrationImpl::disable() {}
 
-void CalibrationImpl::calibrate_gyro_async(const Calibration::calibration_callback_t& callback)
+void CalibrationImpl::calibrate_gyro_async(const CalibrationCallback& callback)
 {
     std::lock_guard<std::mutex> lock(_calibration_mutex);
 
     if (_parent->is_armed()) {
-        report_failed("System is armed.");
+        Calibration::ProgressData progress_data;
+        call_callback(callback, Calibration::Result::FailedArmed, progress_data);
         return;
     }
 
-    if (_state != State::NONE) {
-        Calibration::ProgressData progress_data(false, NAN, false, "");
-        call_user_callback(callback, Calibration::Result::BUSY, progress_data);
+    if (_state != State::None) {
+        Calibration::ProgressData progress_data;
+        call_callback(callback, Calibration::Result::Busy, progress_data);
         return;
     }
 
-    _state = State::GYRO_CALIBRATION;
+    _state = State::GyroCalibration;
     _calibration_callback = callback;
 
     MAVLinkCommands::CommandLong command{};
@@ -63,10 +64,10 @@ void CalibrationImpl::calibrate_gyro_async(const Calibration::calibration_callba
         command, std::bind(&CalibrationImpl::command_result_callback, this, _1, _2));
 }
 
-void CalibrationImpl::call_user_callback(
-    const Calibration::calibration_callback_t& callback,
+void CalibrationImpl::call_callback(
+    const CalibrationCallback& callback,
     const Calibration::Result& result,
-    const Calibration::ProgressData& progress_data)
+    const Calibration::ProgressData progress_data)
 {
     if (callback) {
         _parent->call_user_callback(
@@ -74,23 +75,23 @@ void CalibrationImpl::call_user_callback(
     }
 }
 
-void CalibrationImpl::calibrate_accelerometer_async(
-    const Calibration::calibration_callback_t& callback)
+void CalibrationImpl::calibrate_accelerometer_async(const CalibrationCallback& callback)
 {
     std::lock_guard<std::mutex> lock(_calibration_mutex);
 
     if (_parent->is_armed()) {
-        report_failed("System is armed.");
+        Calibration::ProgressData progress_data;
+        call_callback(callback, Calibration::Result::FailedArmed, progress_data);
         return;
     }
 
-    if (_state != State::NONE) {
-        Calibration::ProgressData progress_data(false, NAN, false, "");
-        call_user_callback(callback, Calibration::Result::BUSY, progress_data);
+    if (_state != State::None) {
+        Calibration::ProgressData progress_data;
+        call_callback(callback, Calibration::Result::Busy, progress_data);
         return;
     }
 
-    _state = State::ACCELEROMETER_CALIBRATION;
+    _state = State::AccelerometerCalibration;
     _calibration_callback = callback;
 
     MAVLinkCommands::CommandLong command{};
@@ -102,23 +103,23 @@ void CalibrationImpl::calibrate_accelerometer_async(
         command, std::bind(&CalibrationImpl::command_result_callback, this, _1, _2));
 }
 
-void CalibrationImpl::calibrate_magnetometer_async(
-    const Calibration::calibration_callback_t& callback)
+void CalibrationImpl::calibrate_magnetometer_async(const CalibrationCallback& callback)
 {
     std::lock_guard<std::mutex> lock(_calibration_mutex);
 
     if (_parent->is_armed()) {
-        report_failed("System is armed.");
+        Calibration::ProgressData progress_data;
+        call_callback(callback, Calibration::Result::FailedArmed, progress_data);
         return;
     }
 
-    if (_state != State::NONE) {
-        Calibration::ProgressData progress_data(false, NAN, false, "");
-        call_user_callback(callback, Calibration::Result::BUSY, progress_data);
+    if (_state != State::None) {
+        Calibration::ProgressData progress_data;
+        call_callback(callback, Calibration::Result::Busy, progress_data);
         return;
     }
 
-    _state = State::MAGNETOMETER_CALIBRATION;
+    _state = State::MagnetometerCalibration;
     _calibration_callback = callback;
 
     MAVLinkCommands::CommandLong command{};
@@ -130,23 +131,51 @@ void CalibrationImpl::calibrate_magnetometer_async(
         command, std::bind(&CalibrationImpl::command_result_callback, this, _1, _2));
 }
 
-void CalibrationImpl::calibrate_gimbal_accelerometer_async(
-    const Calibration::calibration_callback_t& callback)
+void CalibrationImpl::calibrate_level_horizon_async(const CalibrationCallback& callback)
 {
     std::lock_guard<std::mutex> lock(_calibration_mutex);
 
     if (_parent->is_armed()) {
-        report_failed("System is armed.");
+        Calibration::ProgressData progress_data;
+        call_callback(callback, Calibration::Result::FailedArmed, progress_data);
         return;
     }
 
-    if (_state != State::NONE) {
-        Calibration::ProgressData progress_data(false, NAN, false, "");
-        call_user_callback(callback, Calibration::Result::BUSY, progress_data);
+    if (_state != State::None) {
+        Calibration::ProgressData progress_data;
+        call_callback(callback, Calibration::Result::Busy, progress_data);
         return;
     }
 
-    _state = State::GIMBAL_ACCELEROMETER_CALIBRATION;
+    _state = State::AccelerometerCalibration;
+    _calibration_callback = callback;
+
+    MAVLinkCommands::CommandLong command{};
+    command.command = MAV_CMD_PREFLIGHT_CALIBRATION;
+    MAVLinkCommands::CommandLong::set_as_reserved(command.params, 0.0f);
+    command.params.param5 = 2.0f; // Board Level
+    command.target_component_id = MAV_COMP_ID_AUTOPILOT1;
+    _parent->send_command_async(
+        command, std::bind(&CalibrationImpl::command_result_callback, this, _1, _2));
+}
+
+void CalibrationImpl::calibrate_gimbal_accelerometer_async(const CalibrationCallback& callback)
+{
+    std::lock_guard<std::mutex> lock(_calibration_mutex);
+
+    if (_parent->is_armed()) {
+        Calibration::ProgressData progress_data;
+        call_callback(callback, Calibration::Result::FailedArmed, progress_data);
+        return;
+    }
+
+    if (_state != State::None) {
+        Calibration::ProgressData progress_data;
+        call_callback(callback, Calibration::Result::Busy, progress_data);
+        return;
+    }
+
+    _state = State::GimbalAccelerometerCalibration;
     _calibration_callback = callback;
 
     MAVLinkCommands::CommandLong command{};
@@ -158,23 +187,25 @@ void CalibrationImpl::calibrate_gimbal_accelerometer_async(
         command, std::bind(&CalibrationImpl::command_result_callback, this, _1, _2));
 }
 
-void CalibrationImpl::cancel_calibration()
+void CalibrationImpl::cancel() const
 {
     std::lock_guard<std::mutex> lock(_calibration_mutex);
 
     uint8_t target_component_id = MAV_COMP_ID_AUTOPILOT1;
 
     switch (_state) {
-        case State::NONE:
+        case State::None:
             LogWarn() << "No calibration to cancel";
             return;
-        case State::GYRO_CALIBRATION:
+        case State::GyroCalibration:
             break;
-        case State::ACCELEROMETER_CALIBRATION:
+        case State::AccelerometerCalibration:
             break;
-        case State::MAGNETOMETER_CALIBRATION:
+        case State::MagnetometerCalibration:
             break;
-        case State::GIMBAL_ACCELEROMETER_CALIBRATION:
+        case State::LevelHorizonCalibration:
+            break;
+        case State::GimbalAccelerometerCalibration:
             target_component_id = MAV_COMP_ID_GIMBAL;
             break;
     }
@@ -193,7 +224,7 @@ void CalibrationImpl::command_result_callback(
 {
     std::lock_guard<std::mutex> lock(_calibration_mutex);
 
-    if (_state == State::NONE) {
+    if (_state == State::None) {
         // It might be someone else like a ground station trying to do a
         // calibration. We silently ignore it.
         return;
@@ -203,38 +234,38 @@ void CalibrationImpl::command_result_callback(
     // use the progress info. If we get an ack, we need to translate that to
     // a first progress update, and then parse the statustexts for progress.
     switch (command_result) {
-        case MAVLinkCommands::Result::SUCCESS:
+        case MAVLinkCommands::Result::Success:
             // Silently ignore.
             break;
 
-        case MAVLinkCommands::Result::NO_SYSTEM:
+        case MAVLinkCommands::Result::NoSystem:
             // FALLTHROUGH
-        case MAVLinkCommands::Result::CONNECTION_ERROR:
+        case MAVLinkCommands::Result::ConnectionError:
             // FALLTHROUGH
-        case MAVLinkCommands::Result::BUSY:
+        case MAVLinkCommands::Result::Busy:
             // FALLTHROUGH
-        case MAVLinkCommands::Result::COMMAND_DENIED:
+        case MAVLinkCommands::Result::CommandDenied:
             // FALLTHROUGH
-        case MAVLinkCommands::Result::UNKNOWN_ERROR:
+        case MAVLinkCommands::Result::Unsupported:
             // FALLTHROUGH
-        case MAVLinkCommands::Result::TIMEOUT: {
+        case MAVLinkCommands::Result::UnknownError:
+            // FALLTHROUGH
+        case MAVLinkCommands::Result::Timeout: {
             // Report all error cases.
             const auto timeout_result = calibration_result_from_command_result(command_result);
-            call_user_callback(
-                _calibration_callback,
-                timeout_result,
-                Calibration::ProgressData(false, NAN, false, ""));
+            call_callback(_calibration_callback, timeout_result, Calibration::ProgressData());
             _calibration_callback = nullptr;
-            _state = State::NONE;
+            _state = State::None;
             break;
         }
 
-        case MAVLinkCommands::Result::IN_PROGRESS: {
+        case MAVLinkCommands::Result::InProgress: {
             const auto progress_result = calibration_result_from_command_result(command_result);
-            call_user_callback(
-                _calibration_callback,
-                progress_result,
-                Calibration::ProgressData(true, progress, false, ""));
+            Calibration::ProgressData progress_data;
+            progress_data.has_progress = true;
+            progress_data.progress = progress;
+
+            call_callback(_calibration_callback, progress_result, progress_data);
             break;
         }
     };
@@ -244,29 +275,29 @@ Calibration::Result
 CalibrationImpl::calibration_result_from_command_result(MAVLinkCommands::Result result)
 {
     switch (result) {
-        case MAVLinkCommands::Result::SUCCESS:
-            return Calibration::Result::SUCCESS;
-        case MAVLinkCommands::Result::NO_SYSTEM:
-            return Calibration::Result::NO_SYSTEM;
-        case MAVLinkCommands::Result::CONNECTION_ERROR:
-            return Calibration::Result::CONNECTION_ERROR;
-        case MAVLinkCommands::Result::BUSY:
-            return Calibration::Result::BUSY;
-        case MAVLinkCommands::Result::COMMAND_DENIED:
-            return Calibration::Result::COMMAND_DENIED;
-        case MAVLinkCommands::Result::TIMEOUT:
-            return Calibration::Result::TIMEOUT;
-        case MAVLinkCommands::Result::IN_PROGRESS:
-            return Calibration::Result::IN_PROGRESS;
+        case MAVLinkCommands::Result::Success:
+            return Calibration::Result::Success;
+        case MAVLinkCommands::Result::NoSystem:
+            return Calibration::Result::NoSystem;
+        case MAVLinkCommands::Result::ConnectionError:
+            return Calibration::Result::ConnectionError;
+        case MAVLinkCommands::Result::Busy:
+            return Calibration::Result::Busy;
+        case MAVLinkCommands::Result::CommandDenied:
+            return Calibration::Result::CommandDenied;
+        case MAVLinkCommands::Result::Timeout:
+            return Calibration::Result::Timeout;
+        case MAVLinkCommands::Result::InProgress:
+            return Calibration::Result::Next;
         default:
-            return Calibration::Result::UNKNOWN;
+            return Calibration::Result::Unknown;
     }
 }
 
 void CalibrationImpl::process_statustext(const mavlink_message_t& message)
 {
     std::lock_guard<std::mutex> lock(_calibration_mutex);
-    if (_state == State::NONE) {
+    if (_state == State::None) {
         return;
     }
 
@@ -277,25 +308,25 @@ void CalibrationImpl::process_statustext(const mavlink_message_t& message)
     _parser.parse(statustext.text);
 
     switch (_parser.get_status()) {
-        case CalibrationStatustextParser::Status::NONE:
+        case CalibrationStatustextParser::Status::None:
             // Ignore it.
             break;
-        case CalibrationStatustextParser::Status::STARTED:
+        case CalibrationStatustextParser::Status::Started:
             report_started();
             break;
-        case CalibrationStatustextParser::Status::DONE:
+        case CalibrationStatustextParser::Status::Done:
             report_done();
             break;
-        case CalibrationStatustextParser::Status::FAILED:
+        case CalibrationStatustextParser::Status::Failed:
             report_failed(_parser.get_failed_message());
             break;
-        case CalibrationStatustextParser::Status::CANCELLED:
+        case CalibrationStatustextParser::Status::Cancelled:
             report_cancelled();
             break;
-        case CalibrationStatustextParser::Status::PROGRESS:
+        case CalibrationStatustextParser::Status::Progress:
             report_progress(_parser.get_progress());
             break;
-        case CalibrationStatustextParser::Status::INSTRUCTION:
+        case CalibrationStatustextParser::Status::Instruction:
             report_instruction(_parser.get_instruction());
             break;
     }
@@ -303,24 +334,29 @@ void CalibrationImpl::process_statustext(const mavlink_message_t& message)
     // In case we succeed or fail we need to notify that params
     // might have changed.
     switch (_parser.get_status()) {
-        case CalibrationStatustextParser::Status::DONE:
+        case CalibrationStatustextParser::Status::Done:
             // FALLTHROUGH
-        case CalibrationStatustextParser::Status::FAILED:
+        case CalibrationStatustextParser::Status::Failed:
             // FALLTHROUGH
-        case CalibrationStatustextParser::Status::CANCELLED:
+        case CalibrationStatustextParser::Status::Cancelled:
             switch (_state) {
-                case State::NONE:
+                case State::None:
                     break;
-                case State::GYRO_CALIBRATION:
+                case State::GyroCalibration:
                     _parent->param_changed("CAL_GYRO0_ID");
                     break;
-                case State::ACCELEROMETER_CALIBRATION:
+                case State::AccelerometerCalibration:
                     _parent->param_changed("CAL_ACC0_ID");
                     break;
-                case State::MAGNETOMETER_CALIBRATION:
+                case State::MagnetometerCalibration:
                     _parent->param_changed("CAL_MAG0_ID");
                     break;
-                case State::GIMBAL_ACCELEROMETER_CALIBRATION:
+                case State::LevelHorizonCalibration:
+                    _parent->param_changed("SENS_BOARD_X_OFF");
+                    _parent->param_changed("SENS_BOARD_Y_OFF");
+                    _parent->param_changed("SENS_BOARD_Z_OFF");
+                    break;
+                case State::GimbalAccelerometerCalibration:
                     break;
             }
 
@@ -329,13 +365,13 @@ void CalibrationImpl::process_statustext(const mavlink_message_t& message)
     }
 
     switch (_parser.get_status()) {
-        case CalibrationStatustextParser::Status::DONE:
+        case CalibrationStatustextParser::Status::Done:
             // FALLTHROUGH
-        case CalibrationStatustextParser::Status::FAILED:
+        case CalibrationStatustextParser::Status::Failed:
             // FALLTHROUGH
-        case CalibrationStatustextParser::Status::CANCELLED:
+        case CalibrationStatustextParser::Status::Cancelled:
             _calibration_callback = nullptr;
-            _state = State::NONE;
+            _state = State::None;
             break;
         default:
             break;
@@ -349,34 +385,38 @@ void CalibrationImpl::report_started()
 
 void CalibrationImpl::report_done()
 {
-    const Calibration::ProgressData progress_data(false, NAN, false, "");
-    call_user_callback(_calibration_callback, Calibration::Result::SUCCESS, progress_data);
+    const Calibration::ProgressData progress_data;
+    call_callback(_calibration_callback, Calibration::Result::Success, progress_data);
 }
 
 void CalibrationImpl::report_failed(const std::string& failed)
 {
     LogErr() << "Calibration failed: " << failed;
-    const Calibration::ProgressData progress_data(false, NAN, false, "");
-    call_user_callback(_calibration_callback, Calibration::Result::FAILED, progress_data);
+    const Calibration::ProgressData progress_data;
+    call_callback(_calibration_callback, Calibration::Result::Failed, progress_data);
 }
 
 void CalibrationImpl::report_cancelled()
 {
     LogWarn() << "Calibration was cancelled";
-    const Calibration::ProgressData progress_data(false, NAN, false, "");
-    call_user_callback(_calibration_callback, Calibration::Result::CANCELLED, progress_data);
+    const Calibration::ProgressData progress_data;
+    call_callback(_calibration_callback, Calibration::Result::Cancelled, progress_data);
 }
 
 void CalibrationImpl::report_progress(float progress)
 {
-    const Calibration::ProgressData progress_data(true, progress, false, "");
-    call_user_callback(_calibration_callback, Calibration::Result::IN_PROGRESS, progress_data);
+    Calibration::ProgressData progress_data;
+    progress_data.has_progress = true;
+    progress_data.progress = progress;
+    call_callback(_calibration_callback, Calibration::Result::Next, progress_data);
 }
 
 void CalibrationImpl::report_instruction(const std::string& instruction)
 {
-    const Calibration::ProgressData progress_data(false, NAN, true, instruction);
-    call_user_callback(_calibration_callback, Calibration::Result::INSTRUCTION, progress_data);
+    Calibration::ProgressData progress_data;
+    progress_data.has_status_text = true;
+    progress_data.status_text = instruction;
+    call_callback(_calibration_callback, Calibration::Result::Next, progress_data);
 }
 
 } // namespace mavsdk

@@ -2,21 +2,33 @@
 #include "backend.h"
 #include <string>
 
-void runBackend(const char* connection_url, const int mavsdk_server_port, void (*onServerStarted)(void*), void* context)
+MavsdkBackend* mavsdk_server_run(const char* system_address, const int mavsdk_server_port)
 {
-    mavsdk::backend::MavsdkBackend backend;
+    auto backend = new MavsdkBackend();
 
-    auto grpc_port = backend.startGRPCServer(mavsdk_server_port);
+    auto grpc_port = backend->startGRPCServer(mavsdk_server_port);
     if (grpc_port == 0) {
         // Server failed to start
-        return;
+        return nullptr;
     }
 
-    backend.connect(std::string(connection_url));
+    backend->connect(std::string(system_address));
 
-    if (onServerStarted != nullptr) {
-        onServerStarted(context);
-    }
+    return backend;
+}
 
-    backend.wait();
+int mavsdk_server_get_port(MavsdkBackend* backend)
+{
+    return backend->getPort();
+}
+
+void mavsdk_server_attach(MavsdkBackend* backend)
+{
+    backend->wait();
+}
+
+void mavsdk_server_stop(MavsdkBackend* backend)
+{
+    backend->stop();
+    delete backend;
 }

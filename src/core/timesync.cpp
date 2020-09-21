@@ -6,27 +6,36 @@
 
 namespace mavsdk {
 
-Timesync::Timesync(SystemImpl& parent) : _parent(parent)
-{
-    using namespace std::placeholders; // for `_1`
-
-    _parent.register_mavlink_message_handler(
-        MAVLINK_MSG_ID_TIMESYNC, std::bind(&Timesync::process_timesync, this, _1), this);
-}
+Timesync::Timesync(SystemImpl& parent) : _parent(parent) {}
 
 Timesync::~Timesync()
 {
     _parent.unregister_all_mavlink_message_handlers(this);
 }
 
+void Timesync::enable()
+{
+    _is_enabled = true;
+    _parent.register_mavlink_message_handler(
+        MAVLINK_MSG_ID_TIMESYNC,
+        std::bind(&Timesync::process_timesync, this, std::placeholders::_1),
+        this);
+}
+
 void Timesync::do_work()
 {
+    if (!_is_enabled) {
+        return;
+    }
+
     if (_parent.get_time().elapsed_since_s(_last_time) >= _TIMESYNC_SEND_INTERVAL_S) {
         if (_parent.is_connected()) {
             uint64_t now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
                                   _parent.get_autopilot_time().now().time_since_epoch())
                                   .count();
             send_timesync(0, now_ns);
+        } else {
+            _autopilot_timesync_acquired = false;
         }
         _last_time = _parent.get_time().steady_time();
     }
@@ -42,7 +51,7 @@ void Timesync::process_timesync(const mavlink_message_t& message)
                          _parent.get_autopilot_time().now().time_since_epoch())
                          .count();
 
-    if (timesync.tc1 == 0) {
+    if (timesync.tc1 == 0 && _autopilot_timesync_acquired) {
         // Send synced time to remote system
         send_timesync(now_ns, timesync.ts1);
     } else if (timesync.tc1 > 0) {
@@ -75,6 +84,7 @@ void Timesync::set_timesync_offset(int64_t offset_ns, uint64_t start_transfer_lo
 
         // Save time offset for other components to use
         _parent.get_autopilot_time().shift_time_by(std::chrono::nanoseconds(offset_ns));
+        _autopilot_timesync_acquired = true;
 
         // Reset high RTT count after filter update
         _high_rtt_count = 0;

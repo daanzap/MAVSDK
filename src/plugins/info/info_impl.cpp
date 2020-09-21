@@ -29,6 +29,9 @@ void InfoImpl::init()
         MAVLINK_MSG_ID_FLIGHT_INFORMATION,
         std::bind(&InfoImpl::process_flight_information, this, _1),
         this);
+
+    _parent->register_mavlink_message_handler(
+        MAVLINK_MSG_ID_ATTITUDE, std::bind(&InfoImpl::process_attitude, this, _1), this);
 }
 
 void InfoImpl::deinit()
@@ -102,12 +105,10 @@ void InfoImpl::process_autopilot_version(const mavlink_message_t& message)
     _version.flight_sw_minor = (autopilot_version.flight_sw_version >> (8 * 2)) & 0xFF;
     _version.flight_sw_patch = (autopilot_version.flight_sw_version >> (8 * 1)) & 0xFF;
 
-    // first three bytes of flight_custon_version (little endian) describe vendor version
-    translate_binary_to_str(
+    // first three bytes of flight_custom_version (little endian) describe vendor version
+    _version.flight_sw_git_hash = swap_and_translate_binary_to_str(
         autopilot_version.flight_custom_version + 3,
-        sizeof(autopilot_version.flight_custom_version) - 3,
-        _version.flight_sw_git_hash,
-        Info::GIT_HASH_STR_LEN);
+        sizeof(autopilot_version.flight_custom_version) - 3);
 
     _version.flight_sw_vendor_major = autopilot_version.flight_custom_version[2];
     _version.flight_sw_vendor_minor = autopilot_version.flight_custom_version[1];
@@ -131,25 +132,17 @@ void InfoImpl::process_autopilot_version(const mavlink_message_t& message)
     //     << "."
     //     << _version.os_sw_patch;
 
-    translate_binary_to_str(
-        autopilot_version.os_custom_version,
-        sizeof(autopilot_version.os_custom_version),
-        _version.os_sw_git_hash,
-        Info::GIT_HASH_STR_LEN);
+    _version.os_sw_git_hash = swap_and_translate_binary_to_str(
+        autopilot_version.os_custom_version, sizeof(autopilot_version.os_custom_version));
 
     _product.vendor_id = autopilot_version.vendor_id;
-    const char* vendor_name = vendor_id_str(autopilot_version.vendor_id);
-    STRNCPY(_product.vendor_name, vendor_name, sizeof(_product.vendor_name) - 1);
+    _product.vendor_name = vendor_id_str(autopilot_version.vendor_id);
 
     _product.product_id = autopilot_version.product_id;
-    const char* product_name = product_id_str(autopilot_version.product_id);
-    STRNCPY(_product.product_name, product_name, sizeof(_product.product_name) - 1);
+    _product.product_name = product_id_str(autopilot_version.product_id);
 
-    static_assert(
-        sizeof(_identification.hardware_uid) == sizeof(autopilot_version.uid2),
-        "UID length mismatch");
-    std::memcpy(
-        _identification.hardware_uid, autopilot_version.uid2, sizeof(autopilot_version.uid2));
+    _identification.hardware_uid =
+        translate_binary_to_str(autopilot_version.uid2, sizeof(autopilot_version.uid2));
 
     _information_received = true;
 }
@@ -167,22 +160,36 @@ void InfoImpl::process_flight_information(const mavlink_message_t& message)
     _flight_information_received = true;
 }
 
-void InfoImpl::translate_binary_to_str(
-    uint8_t* binary, unsigned binary_len, char* str, unsigned str_len)
+std::string InfoImpl::swap_and_translate_binary_to_str(uint8_t* binary, unsigned binary_len)
 {
+    std::string str(binary_len * 2, '0');
+
     for (unsigned i = 0; i < binary_len; ++i) {
         // One hex number occupies 2 chars.
         // The binary is in little endian, therefore we need to swap the bytes for us to read.
-        snprintf(&str[i * 2], str_len - i * 2, "%02x", binary[binary_len - 1 - i]);
+        snprintf(&str[i * 2], str.length() - i * 2, "%02x", binary[binary_len - 1 - i]);
     }
+
+    return str;
+}
+
+std::string InfoImpl::translate_binary_to_str(uint8_t* binary, unsigned binary_len)
+{
+    std::string str(binary_len * 2 + 1, '0');
+
+    for (unsigned i = 0; i < binary_len; ++i) {
+        // One hex number occupies 2 chars.
+        snprintf(&str[i * 2], str.length() - i * 2, "%02x", binary[i]);
+    }
+
+    return str;
 }
 
 std::pair<Info::Result, Info::Identification> InfoImpl::get_identification() const
 {
     std::lock_guard<std::mutex> lock(_mutex);
     return std::make_pair<>(
-        (_information_received ? Info::Result::SUCCESS :
-                                 Info::Result::INFORMATION_NOT_RECEIVED_YET),
+        (_information_received ? Info::Result::Success : Info::Result::InformationNotReceivedYet),
         _identification);
 }
 
@@ -190,8 +197,7 @@ std::pair<Info::Result, Info::Version> InfoImpl::get_version() const
 {
     std::lock_guard<std::mutex> lock(_mutex);
     return std::make_pair<>(
-        (_information_received ? Info::Result::SUCCESS :
-                                 Info::Result::INFORMATION_NOT_RECEIVED_YET),
+        (_information_received ? Info::Result::Success : Info::Result::InformationNotReceivedYet),
         _version);
 }
 
@@ -199,8 +205,7 @@ std::pair<Info::Result, Info::Product> InfoImpl::get_product() const
 {
     std::lock_guard<std::mutex> lock(_mutex);
     return std::make_pair<>(
-        (_information_received ? Info::Result::SUCCESS :
-                                 Info::Result::INFORMATION_NOT_RECEIVED_YET),
+        (_information_received ? Info::Result::Success : Info::Result::InformationNotReceivedYet),
         _product);
 }
 
@@ -208,22 +213,22 @@ std::pair<Info::Result, Info::FlightInfo> InfoImpl::get_flight_information() con
 {
     std::lock_guard<std::mutex> lock(_mutex);
     return std::make_pair<>(
-        (_flight_information_received ? Info::Result::SUCCESS :
-                                        Info::Result::INFORMATION_NOT_RECEIVED_YET),
+        (_flight_information_received ? Info::Result::Success :
+                                        Info::Result::InformationNotReceivedYet),
         _flight_info);
 }
 
-const char* InfoImpl::vendor_id_str(uint16_t vendor_id)
+const std::string InfoImpl::vendor_id_str(uint16_t vendor_id)
 {
     switch (vendor_id) {
         case 0x26ac:
-            return "Yuneec";
+            return "3D Robotics Inc.";
         default:
             return "undefined";
     }
 }
 
-const char* InfoImpl::product_id_str(uint16_t product_id)
+const std::string InfoImpl::product_id_str(uint16_t product_id)
 {
     switch (product_id) {
         case 0x0010:
@@ -231,6 +236,41 @@ const char* InfoImpl::product_id_str(uint16_t product_id)
         default:
             return "undefined";
     }
+}
+
+void InfoImpl::process_attitude(const mavlink_message_t& message)
+{
+    // We use the attitude message to estimate the lockstep speed factor
+    // because it's common to be sent, arrives at high rate, and contains
+    // the timestamp field.
+    mavlink_attitude_t attitude;
+    mavlink_msg_attitude_decode(&message, &attitude);
+
+    std::lock_guard<std::mutex> lock(_mutex);
+
+    if (_last_time_boot_ms != 0) {
+        const double new_factor = (attitude.time_boot_ms - _last_time_boot_ms) /
+                                  (_time.elapsed_since_s(_last_time_attitude_arrived) * 1000.0);
+
+        if (std::isfinite(_speed_factor)) {
+            // Do some filtering.
+            _speed_factor = _speed_factor * 0.9 + new_factor * 0.1;
+        } else {
+            _speed_factor = new_factor;
+        }
+    }
+
+    _last_time_boot_ms = attitude.time_boot_ms;
+    _last_time_attitude_arrived = _time.steady_time();
+}
+
+std::pair<Info::Result, double> InfoImpl::get_speed_factor() const
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    return std::make_pair<>(
+        (std::isfinite(_speed_factor) ? Info::Result::Success :
+                                        Info::Result::InformationNotReceivedYet),
+        _speed_factor);
 }
 
 } // namespace mavsdk

@@ -21,11 +21,11 @@ public:
     void enable() override;
     void disable() override;
 
-    const FollowMe::Config& get_config() const;
+    FollowMe::Config get_config() const;
     FollowMe::Result set_config(const FollowMe::Config& config);
 
-    void set_target_location(const FollowMe::TargetLocation& location);
-    const FollowMe::TargetLocation& get_last_location() const;
+    FollowMe::Result set_target_location(const FollowMe::TargetLocation& location);
+    FollowMe::TargetLocation get_last_location() const;
 
     bool is_active() const;
 
@@ -48,7 +48,7 @@ private:
     void send_target_location();
     void stop_sending_target_location();
 
-    enum class EstimationCapabilites { POS, VEL };
+    enum class EstimationCapabilities { POS, VEL };
 
     enum class Mode { NOT_ACTIVE, ACTIVE } _mode = Mode::NOT_ACTIVE;
 
@@ -59,6 +59,11 @@ private:
         DISTANCE = 1 << 2,
         RESPONSIVENESS = 1 << 3
     };
+
+    constexpr static const float CONFIG_MIN_HEIGHT_M = 8.0f;
+    constexpr static const float CONFIG_MIN_FOLLOW_DIST_M = 1.0f;
+    constexpr static const float CONFIG_MIN_RESPONSIVENESS = 0.f;
+    constexpr static const float CONFIG_MAX_RESPONSIVENESS = 1.0f;
 
     friend config_val_t operator~(ConfigParameter cfgp) { return ~static_cast<config_val_t>(cfgp); }
     friend config_val_t operator|(config_val_t config_val, ConfigParameter cfgp)
@@ -84,7 +89,7 @@ private:
     void* _target_location_cookie = nullptr;
 
     Time _time{};
-    uint8_t _estimatation_capabilities = 0; // sent to vehicle
+    uint8_t _estimation_capabilities = 0; // sent to vehicle
     FollowMe::Config _config{}; // has FollowMe configuration settings
 
     const float SENDER_RATE = 1.0f; // send location updates once in a second

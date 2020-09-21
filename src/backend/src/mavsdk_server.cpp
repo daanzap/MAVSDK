@@ -41,7 +41,8 @@ int main(int argc, char** argv)
         }
     }
 
-    runBackend(connection_url.c_str(), mavsdk_server_port, nullptr, nullptr);
+    auto backend = mavsdk_server_run(connection_url.c_str(), mavsdk_server_port);
+    mavsdk_server_attach(backend);
 }
 
 void usage()
@@ -61,7 +62,8 @@ void usage()
               << "  -p          : set the port on which to run the gRPC server" << std::endl;
 }
 
-bool is_integer(const std::string& tested_integer) {
+bool is_integer(const std::string& tested_integer)
+{
     for (const auto& digit : tested_integer) {
         if (!std::isdigit(digit)) {
             return false;

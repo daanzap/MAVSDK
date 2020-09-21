@@ -1,6 +1,8 @@
 add_library(mavsdk_gimbal
     gimbal.cpp
     gimbal_impl.cpp
+    gimbal_protocol_v1.cpp
+    gimbal_protocol_v2.cpp
 )
 
 target_link_libraries(mavsdk_gimbal
@@ -9,6 +11,8 @@ target_link_libraries(mavsdk_gimbal
 
 set_target_properties(mavsdk_gimbal
     PROPERTIES COMPILE_FLAGS ${warnings}
+    VERSION ${MAVSDK_VERSION_STRING}
+    SOVERSION ${MAVSDK_SOVERSION_STRING}
 )
 
 target_include_directories(mavsdk_gimbal PUBLIC

@@ -19,18 +19,23 @@ public:
     void enable() override;
     void disable() override;
 
-    void calibrate_gyro_async(const Calibration::calibration_callback_t& callback);
-    void calibrate_accelerometer_async(const Calibration::calibration_callback_t& callback);
-    void calibrate_magnetometer_async(const Calibration::calibration_callback_t& callback);
-    void calibrate_gimbal_accelerometer_async(const Calibration::calibration_callback_t& callback);
+    void cancel() const;
 
-    void cancel_calibration();
+    void calibrate_gyro_async(const Calibration::CalibrateGyroCallback& callback);
+    void calibrate_accelerometer_async(const Calibration::CalibrateAccelerometerCallback& callback);
+    void calibrate_magnetometer_async(const Calibration::CalibrateMagnetometerCallback& callback);
+    void calibrate_level_horizon_async(const Calibration::CalibrateAccelerometerCallback& callback);
+    void calibrate_gimbal_accelerometer_async(
+        const Calibration::CalibrateGimbalAccelerometerCallback& callback);
 
 private:
-    void call_user_callback(
-        const Calibration::calibration_callback_t& callback,
+    typedef std::function<void(const Calibration::Result result, const Calibration::ProgressData)>
+        CalibrationCallback;
+
+    void call_callback(
+        const CalibrationCallback& callback,
         const Calibration::Result& result,
-        const Calibration::ProgressData& progress_data);
+        const Calibration::ProgressData progress_data);
     void process_statustext(const mavlink_message_t& message);
 
     void command_result_callback(MAVLinkCommands::Result command_result, float progress);
@@ -59,14 +64,15 @@ private:
     std::atomic<bool> _is_magnetometer_running = {false};
 
     enum class State {
-        NONE,
-        GYRO_CALIBRATION,
-        ACCELEROMETER_CALIBRATION,
-        MAGNETOMETER_CALIBRATION,
-        GIMBAL_ACCELEROMETER_CALIBRATION
-    } _state{State::NONE};
+        None,
+        GyroCalibration,
+        AccelerometerCalibration,
+        MagnetometerCalibration,
+        LevelHorizonCalibration,
+        GimbalAccelerometerCalibration
+    } _state{State::None};
 
-    Calibration::calibration_callback_t _calibration_callback{nullptr};
+    CalibrationCallback _calibration_callback{nullptr};
 };
 
 } // namespace mavsdk

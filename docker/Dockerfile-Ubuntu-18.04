@@ -18,11 +18,10 @@ RUN apt-get update \
         build-essential \
         ca-certificates \
         ccache \
-        clang-format \
+        clang-format-9 \
         cmake \
         colordiff \
         doxygen \
-        git \
         golang-go \
         libcurl4-openssl-dev \
         libltdl-dev \
@@ -40,7 +39,11 @@ RUN apt-get update \
     && apt-get clean autoclean \
     && rm -rf /var/lib/apt/lists/{apt,dpkg,cache,log} /tmp/* /var/tmp/*
 
-RUN update-alternatives --install /usr/bin/clang-format clang-format /usr/bin/clang-format-6.0 1000
+# We need git with version at least 2.18 for GitHub checkout v2
+RUN add-apt-repository ppa:git-core/ppa -y \
+    && apt-get update \
+    && apt-get install git -y \
+    && rm -rf /var/lib/apt/lists/{apt,dpkg,cache,log} /tmp/* /var/tmp/*
 
 RUN gem install --no-document fpm;
 

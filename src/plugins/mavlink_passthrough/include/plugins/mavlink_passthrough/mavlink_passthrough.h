@@ -19,9 +19,6 @@ class MavlinkPassthroughImpl;
  * "With great power comes great responsibility." - This plugin allows
  * you to send and receive MAVLink messages. There is no checking or
  * safe-guards, you're on your own, and you have been warned.
- *
- * @note This plugin is not included in the build by default. To add it
- *       `make ENABLE_MAVLINK_PASSTHROUGH=1` is required.
  */
 class MavlinkPassthrough : public PluginBase {
 public:
@@ -47,18 +44,17 @@ public:
      * @brief Possible results returned for requests.
      */
     enum class Result {
-        UNKNOWN, /**< @brief Unknown error. */
-        SUCCESS, /**< @brief Success. */
-        CONNECTION_ERROR /**< @brief Connection error. */
+        Unknown, /**< @brief Unknown error. */
+        Success, /**< @brief Success. */
+        ConnectionError /**< @brief Connection error. */
     };
 
     /**
-     * @brief Returns a human-readable English string for `MavlinkPassthrough::Result`.
+     * @brief Stream operator to print information about a `MavlinkPassthrough::Result`.
      *
-     * @param result The enum value for which a human readable string is required.
-     * @return Human readable string for the `MavlinkPassthrough::Result`.
+     * @return A reference to the stream.
      */
-    std::string result_str(Result result);
+    friend std::ostream& operator<<(std::ostream& str, MavlinkPassthrough::Result const& result);
 
     /**
      * @brief Send message.

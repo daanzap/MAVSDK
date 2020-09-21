@@ -10,8 +10,14 @@ extern "C" {
 #define DLLExport __attribute__((visibility("default")))
 #endif
 
-DLLExport void
-runBackend(const char* system_address, const int mavsdk_server_port, void (*onServerStarted)(void*), void* context);
+DLLExport struct MavsdkBackend*
+mavsdk_server_run(const char* system_address, const int mavsdk_server_port);
+
+DLLExport int mavsdk_server_get_port(struct MavsdkBackend* backend);
+
+DLLExport void mavsdk_server_attach(struct MavsdkBackend* backend);
+
+DLLExport void mavsdk_server_stop(struct MavsdkBackend* backend);
 
 #ifdef __cplusplus
 }

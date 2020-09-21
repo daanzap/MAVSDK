@@ -44,18 +44,18 @@ void MAVLinkParameters::set_param_async(
     if (name.size() > PARAM_ID_LEN) {
         LogErr() << "Error: param name too long";
         if (callback) {
-            callback(Result::PARAM_NAME_TOO_LONG);
+            callback(Result::ParamNameTooLong);
         }
         return;
     }
 
-    WorkItem new_work{};
-    new_work.type = WorkItem::Type::Set;
-    new_work.set_param_callback = callback;
-    new_work.param_name = name;
-    new_work.param_value = value;
-    new_work.extended = extended;
-    new_work.cookie = cookie;
+    auto new_work = std::make_shared<WorkItem>();
+    new_work->type = WorkItem::Type::Set;
+    new_work->set_param_callback = callback;
+    new_work->param_name = name;
+    new_work->param_value = value;
+    new_work->extended = extended;
+    new_work->cookie = cookie;
 
     _work_queue.push_back(new_work);
 }
@@ -85,19 +85,19 @@ void MAVLinkParameters::get_param_async(
         LogErr() << "Error: param name too long";
         if (callback) {
             ParamValue empty_param;
-            callback(MAVLinkParameters::Result::PARAM_NAME_TOO_LONG, empty_param);
+            callback(MAVLinkParameters::Result::ParamNameTooLong, empty_param);
         }
         return;
     }
 
     // Otherwise push work onto queue.
-    WorkItem new_work{};
-    new_work.type = WorkItem::Type::Get;
-    new_work.get_param_callback = callback;
-    new_work.param_name = name;
-    new_work.param_value = value_type;
-    new_work.extended = extended;
-    new_work.cookie = cookie;
+    auto new_work = std::make_shared<WorkItem>();
+    new_work->type = WorkItem::Type::Get;
+    new_work->get_param_callback = callback;
+    new_work->param_name = name;
+    new_work->param_value = value_type;
+    new_work->extended = extended;
+    new_work->cookie = cookie;
 
     _work_queue.push_back(new_work);
 }
@@ -125,10 +125,39 @@ void MAVLinkParameters::cancel_all_param(const void* cookie)
     LockedQueue<WorkItem>::Guard work_queue_guard(_work_queue);
 
     for (auto item = _work_queue.begin(); item != _work_queue.end(); /* manual incrementation */) {
-        if (item->get()->cookie == cookie) {
+        if ((*item)->cookie == cookie) {
             item = _work_queue.erase(item);
         } else {
             ++item;
+        }
+    }
+}
+
+void MAVLinkParameters::subscribe_param_changed(
+    const std::string& name,
+    ParamValue value_type,
+    MAVLinkParameters::ParamChangedCallback callback,
+    const void* cookie)
+{
+    std::lock_guard<std::mutex> lock(_param_changed_subscriptions_mutex);
+
+    if (callback != nullptr) {
+        ParamChangedSubscription subscription{};
+        subscription.param_name = name;
+        subscription.callback = callback;
+        subscription.cookie = cookie;
+        subscription.value_type = value_type;
+        _param_changed_subscriptions.push_back(subscription);
+
+    } else {
+        for (auto it = _param_changed_subscriptions.begin();
+             it != _param_changed_subscriptions.end();
+             /* ++it */) {
+            if (it->param_name.compare(name) == 0 && it->cookie == cookie) {
+                it = _param_changed_subscriptions.erase(it);
+            } else {
+                ++it;
+            }
         }
     }
 }
@@ -149,8 +178,6 @@ void MAVLinkParameters::do_work()
     char param_id[PARAM_ID_LEN + 1] = {};
     STRNCPY(param_id, work->param_name.c_str(), sizeof(param_id) - 1);
 
-    mavlink_message_t message{};
-
     switch (work->type) {
         case WorkItem::Type::Set: {
             if (work->extended) {
@@ -161,7 +188,7 @@ void MAVLinkParameters::do_work()
                 mavlink_msg_param_ext_set_pack(
                     _parent.get_own_system_id(),
                     _parent.get_own_component_id(),
-                    &message,
+                    &work->mavlink_message,
                     _parent.get_system_id(),
                     MAV_COMP_ID_CAMERA,
                     param_id,
@@ -172,7 +199,7 @@ void MAVLinkParameters::do_work()
                 mavlink_msg_param_set_pack(
                     _parent.get_own_system_id(),
                     _parent.get_own_component_id(),
-                    &message,
+                    &work->mavlink_message,
                     _parent.get_system_id(),
                     _parent.get_autopilot_id(),
                     param_id,
@@ -180,10 +207,10 @@ void MAVLinkParameters::do_work()
                     work->param_value.get_mav_param_type());
             }
 
-            if (!_parent.send_message(message)) {
+            if (!_parent.send_message(work->mavlink_message)) {
                 LogErr() << "Error: Send message failed";
                 if (work->set_param_callback) {
-                    work->set_param_callback(MAVLinkParameters::Result::CONNECTION_ERROR);
+                    work->set_param_callback(MAVLinkParameters::Result::ConnectionError);
                 }
                 work_queue_guard.pop_front();
                 return;
@@ -194,7 +221,9 @@ void MAVLinkParameters::do_work()
 
             // We want to get notified if a timeout happens
             _parent.register_timeout_handler(
-                std::bind(&MAVLinkParameters::receive_timeout, this), 0.5, &_timeout_cookie);
+                std::bind(&MAVLinkParameters::receive_timeout, this),
+                work->timeout_s,
+                &_timeout_cookie);
 
         } break;
 
@@ -204,11 +233,12 @@ void MAVLinkParameters::do_work()
                 mavlink_msg_param_ext_request_read_pack(
                     _parent.get_own_system_id(),
                     _parent.get_own_component_id(),
-                    &message,
+                    &work->mavlink_message,
                     _parent.get_system_id(),
                     MAV_COMP_ID_CAMERA,
                     param_id,
-                    -1);
+                    -1,
+                    0);
 
             } else {
                 // LogDebug() << "request read: "
@@ -221,19 +251,19 @@ void MAVLinkParameters::do_work()
                 mavlink_msg_param_request_read_pack(
                     _parent.get_own_system_id(),
                     _parent.get_own_component_id(),
-                    &message,
+                    &work->mavlink_message,
                     _parent.get_system_id(),
                     _parent.get_autopilot_id(),
                     param_id,
                     -1);
             }
 
-            if (!_parent.send_message(message)) {
+            if (!_parent.send_message(work->mavlink_message)) {
                 LogErr() << "Error: Send message failed";
                 if (work->get_param_callback) {
                     ParamValue empty_param;
                     work->get_param_callback(
-                        MAVLinkParameters::Result::CONNECTION_ERROR, empty_param);
+                        MAVLinkParameters::Result::ConnectionError, empty_param);
                 }
                 work_queue_guard.pop_front();
                 return;
@@ -245,7 +275,9 @@ void MAVLinkParameters::do_work()
 
             // We want to get notified if a timeout happens
             _parent.register_timeout_handler(
-                std::bind(&MAVLinkParameters::receive_timeout, this), 0.5, &_timeout_cookie);
+                std::bind(&MAVLinkParameters::receive_timeout, this),
+                work->timeout_s,
+                &_timeout_cookie);
 
         } break;
     }
@@ -257,6 +289,8 @@ void MAVLinkParameters::process_param_value(const mavlink_message_t& message)
     mavlink_msg_param_value_decode(&message, &param_value);
 
     // LogDebug() << "getting param value: " << extract_safe_param_id(param_value.param_id);
+
+    notify_param_subscriptions(param_value);
 
     LockedQueue<WorkItem>::Guard work_queue_guard(_work_queue);
     auto work = work_queue_guard.get_front();
@@ -280,13 +314,13 @@ void MAVLinkParameters::process_param_value(const mavlink_message_t& message)
             value.set_from_mavlink_param_value(param_value);
             if (value.is_same_type(work->param_value)) {
                 if (work->get_param_callback) {
-                    work->get_param_callback(MAVLinkParameters::Result::SUCCESS, value);
+                    work->get_param_callback(MAVLinkParameters::Result::Success, value);
                 }
             } else {
                 LogErr() << "Param types don't match";
                 ParamValue no_value;
                 if (work->get_param_callback) {
-                    work->get_param_callback(MAVLinkParameters::Result::WRONG_TYPE, no_value);
+                    work->get_param_callback(MAVLinkParameters::Result::WrongType, no_value);
                 }
             }
             _parent.unregister_timeout_handler(_timeout_cookie);
@@ -297,7 +331,7 @@ void MAVLinkParameters::process_param_value(const mavlink_message_t& message)
         case WorkItem::Type::Set: {
             // We are done, inform caller and go back to idle
             if (work->set_param_callback) {
-                work->set_param_callback(MAVLinkParameters::Result::SUCCESS);
+                work->set_param_callback(MAVLinkParameters::Result::Success);
             }
 
             _parent.unregister_timeout_handler(_timeout_cookie);
@@ -305,6 +339,26 @@ void MAVLinkParameters::process_param_value(const mavlink_message_t& message)
             // _parent.get_time().elapsed_since_s(_last_request_time);
             work_queue_guard.pop_front();
         } break;
+    }
+}
+
+void MAVLinkParameters::notify_param_subscriptions(const mavlink_param_value_t& param_value)
+{
+    std::lock_guard<std::mutex> lock(_param_changed_subscriptions_mutex);
+
+    for (const auto& subscription : _param_changed_subscriptions) {
+        if (subscription.param_name.compare(extract_safe_param_id(param_value.param_id)) != 0) {
+            continue;
+        }
+
+        ParamValue value;
+        value.set_from_mavlink_param_value(param_value);
+        if (!subscription.value_type.is_same_type(value)) {
+            LogErr() << "Received wrong param type in subscription for " << subscription.param_name;
+            continue;
+        }
+
+        subscription.callback(value);
     }
 }
 
@@ -336,7 +390,7 @@ void MAVLinkParameters::process_param_ext_value(const mavlink_message_t& message
             value.set_from_mavlink_param_ext_value(param_ext_value);
             if (value.is_same_type(work->param_value)) {
                 if (work->get_param_callback) {
-                    work->get_param_callback(MAVLinkParameters::Result::SUCCESS, value);
+                    work->get_param_callback(MAVLinkParameters::Result::Success, value);
                 }
             } else if (value.is_uint8() && work->param_value.is_uint16()) {
                 // FIXME: workaround for mismatching type uint8_t which should be uint16_t.
@@ -344,7 +398,7 @@ void MAVLinkParameters::process_param_ext_value(const mavlink_message_t& message
                 correct_type_value.set_uint16(static_cast<uint16_t>(value.get_uint8()));
                 if (work->get_param_callback) {
                     work->get_param_callback(
-                        MAVLinkParameters::Result::SUCCESS, correct_type_value);
+                        MAVLinkParameters::Result::Success, correct_type_value);
                 }
             } else if (value.is_uint8() && work->param_value.is_uint32()) {
                 // FIXME: workaround for mismatching type uint8_t which should be uint32_t.
@@ -352,13 +406,13 @@ void MAVLinkParameters::process_param_ext_value(const mavlink_message_t& message
                 correct_type_value.set_uint32(static_cast<uint32_t>(value.get_uint8()));
                 if (work->get_param_callback) {
                     work->get_param_callback(
-                        MAVLinkParameters::Result::SUCCESS, correct_type_value);
+                        MAVLinkParameters::Result::Success, correct_type_value);
                 }
             } else {
                 LogErr() << "Param types don't match";
                 ParamValue no_value;
                 if (work->get_param_callback) {
-                    work->get_param_callback(MAVLinkParameters::Result::WRONG_TYPE, no_value);
+                    work->get_param_callback(MAVLinkParameters::Result::WrongType, no_value);
                 }
             }
             _parent.unregister_timeout_handler(_timeout_cookie);
@@ -405,7 +459,7 @@ void MAVLinkParameters::process_param_ext_ack(const mavlink_message_t& message)
             if (param_ext_ack.param_result == PARAM_ACK_ACCEPTED) {
                 // We are done, inform caller and go back to idle
                 if (work->set_param_callback) {
-                    work->set_param_callback(MAVLinkParameters::Result::SUCCESS);
+                    work->set_param_callback(MAVLinkParameters::Result::Success);
                 }
 
                 _parent.unregister_timeout_handler(_timeout_cookie);
@@ -422,7 +476,7 @@ void MAVLinkParameters::process_param_ext_ack(const mavlink_message_t& message)
                          << int(param_ext_ack.param_result);
 
                 if (work->set_param_callback) {
-                    work->set_param_callback(MAVLinkParameters::Result::TIMEOUT);
+                    work->set_param_callback(MAVLinkParameters::Result::Timeout);
                 }
 
                 _parent.unregister_timeout_handler(_timeout_cookie);
@@ -450,27 +504,55 @@ void MAVLinkParameters::receive_timeout()
 
     switch (work->type) {
         case WorkItem::Type::Get: {
-            if (work->get_param_callback) {
-                ParamValue empty_value;
-                // Notify about timeout
-                LogErr() << "Error: get param busy timeout: " << work->param_name;
-                // LogErr() << "Got it after: " <<
-                // _parent.get_time().elapsed_since_s(_last_request_time);
-                work->get_param_callback(MAVLinkParameters::Result::TIMEOUT, empty_value);
+            ParamValue empty_value;
+            if (work->retries_to_do > 0) {
+                // We're not sure the command arrived, let's retransmit.
+                LogWarn() << "sending again, retries to do: " << work->retries_to_do << "  ("
+                          << work->param_name << ").";
+                if (!_parent.send_message(work->mavlink_message)) {
+                    LogErr() << "connection send error in retransmit (" << work->param_name << ").";
+                    work_queue_guard.pop_front();
+                    work->get_param_callback(
+                        MAVLinkParameters::Result::ConnectionError, empty_value);
+                } else {
+                    --work->retries_to_do;
+                    _parent.register_timeout_handler(
+                        std::bind(&MAVLinkParameters::receive_timeout, this),
+                        work->timeout_s,
+                        &_timeout_cookie);
+                }
+            } else {
+                // We have tried retransmitting, giving up now.
+                LogErr() << "Error: Retrying failed get param busy timeout: " << work->param_name;
+
+                work_queue_guard.pop_front();
+
+                work->get_param_callback(MAVLinkParameters::Result::Timeout, empty_value);
             }
-            // TODO: we should retry!
-            work_queue_guard.pop_front();
         } break;
         case WorkItem::Type::Set: {
-            if (work->set_param_callback) {
-                // Notify about timeout
-                LogErr() << "Error: set param busy timeout: " << work->param_name;
-                // LogErr() << "Got it after: " <<
-                // _parent.get_time().elapsed_since_s(_last_request_time);
-                work->set_param_callback(MAVLinkParameters::Result::TIMEOUT);
+            if (work->retries_to_do > 0) {
+                // We're not sure the command arrived, let's retransmit.
+                LogWarn() << "sending again, retries to do: " << work->retries_to_do << "  ("
+                          << work->param_name << ").";
+                if (!_parent.send_message(work->mavlink_message)) {
+                    LogErr() << "connection send error in retransmit (" << work->param_name << ").";
+                    work_queue_guard.pop_front();
+                    work->set_param_callback(MAVLinkParameters::Result::ConnectionError);
+                } else {
+                    --work->retries_to_do;
+                    _parent.register_timeout_handler(
+                        std::bind(&MAVLinkParameters::receive_timeout, this),
+                        work->timeout_s,
+                        &_timeout_cookie);
+                }
+            } else {
+                // We have tried retransmitting, giving up now.
+                LogErr() << "Error: Retrying failed get param busy timeout: " << work->param_name;
+
+                work_queue_guard.pop_front();
+                work->set_param_callback(MAVLinkParameters::Result::Timeout);
             }
-            // TODO: we should retry!
-            work_queue_guard.pop_front();
         } break;
     }
 }

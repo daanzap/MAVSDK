@@ -1,20 +1,13 @@
 #pragma once
 
 #include <sstream>
+#include "global_include.h"
 
 #if defined(ANDROID)
 #include <android/log.h>
 #else
 #include <iostream>
 #include <ctime>
-#endif
-
-#if !defined(WINDOWS)
-// Remove path and extract only filename.
-#define __FILENAME__ \
-    (__builtin_strrchr(__FILE__, '/') ? __builtin_strrchr(__FILE__, '/') + 1 : __FILE__)
-#else
-#define __FILENAME__ __FILE__
 #endif
 
 #define LogDebug() LogDebugDetailed(__FILENAME__, __LINE__)
@@ -24,7 +17,7 @@
 
 namespace mavsdk {
 
-enum class Color { RED, GREEN, YELLOW, BLUE, GRAY, RESET };
+enum class Color { Red, Green, Yellow, Blue, Gray, Reset };
 
 void set_color(Color color);
 
@@ -66,16 +59,16 @@ public:
 
         switch (_log_level) {
             case LogLevel::Debug:
-                set_color(Color::GREEN);
+                set_color(Color::Green);
                 break;
             case LogLevel::Info:
-                set_color(Color::BLUE);
+                set_color(Color::Blue);
                 break;
             case LogLevel::Warn:
-                set_color(Color::YELLOW);
+                set_color(Color::Yellow);
                 break;
             case LogLevel::Err:
-                set_color(Color::RED);
+                set_color(Color::Red);
                 break;
         }
 
@@ -103,7 +96,7 @@ public:
                 break;
         }
 
-        set_color(Color::RESET);
+        set_color(Color::Reset);
 
         std::cout << _s.str();
         std::cout << " (" << _caller_filename << ":" << std::dec << _caller_filenumber << ")";
